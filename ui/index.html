@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Virtual Office</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #ffffff;
+    --bg2:       #f5f5f4;
+    --bg3:       #eeede9;
+    --border:    rgba(0,0,0,0.10);
+    --border2:   rgba(0,0,0,0.18);
+    --text:      #1a1a18;
+    --text2:     #6b6b67;
+    --text3:     #9a9a95;
+    --accent:    #1a1a18;
+    --mic-live:  #e24b4a;
+    --radius:    8px;
+    --radius-lg: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:      #1c1c1a;
+      --bg2:     #252523;
+      --bg3:     #2e2e2b;
+      --border:  rgba(255,255,255,0.09);
+      --border2: rgba(255,255,255,0.17);
+      --text:    #e8e8e4;
+      --text2:   #9a9a95;
+      --text3:   #6b6b67;
+      --accent:  #e8e8e4;
+    }
+  }
+
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; background: var(--bg); color: var(--text); height: 100dvh; display: flex; overflow: hidden; }
+
+  /* ── Sidebar ── */
+  .sidebar { width: 196px; min-width: 196px; background: var(--bg2); border-right: 0.5px solid var(--border); display: flex; flex-direction: column; padding: 18px 12px 14px; gap: 6px; }
+  .sidebar-title { font-size: 15px; font-weight: 500; }
+  .sidebar-date  { font-size: 11px; color: var(--text2); margin-top: 3px; }
+  .divider { height: 0.5px; background: var(--border); margin: 6px 0; }
+  .section-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .06em; padding: 0 4px; }
+  .agent-btn { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius); border: none; background: transparent; cursor: pointer; font-size: 13px; color: var(--text); width: 100%; text-align: left; transition: background .12s; }
+  .agent-btn:hover  { background: var(--bg3); }
+  .agent-btn.active { background: var(--bg); border: 0.5px solid var(--border2); font-weight: 500; }
+  .agent-icon { font-size: 15px; width: 20px; text-align: center; }
+  .status { margin-top: auto; font-size: 11px; padding: 5px 8px; border-radius: var(--radius); background: var(--bg3); color: var(--text2); display: flex; align-items: center; gap: 5px; }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #639922; }
+  .status-dot.offline { background: var(--mic-live); }
+
+  /* ── Main ── */
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ── Tabs ── */
+  .tabs { display: flex; border-bottom: 0.5px solid var(--border); padding: 0 16px; flex-shrink: 0; }
+  .tab { padding: 11px 14px; font-size: 13px; cursor: pointer; border: none; background: none; color: var(--text2); border-bottom: 2px solid transparent; transition: color .12s; }
+  .tab:hover  { color: var(--text); }
+  .tab.active { color: var(--text); border-bottom-color: var(--text); font-weight: 500; }
+  .panel { flex: 1; display: none; overflow: hidden; }
+  .panel.active { display: flex; flex-direction: column; }
+
+  /* ── Chat ── */
+  .chat-header { padding: 13px 18px 11px; border-bottom: 0.5px solid var(--border); font-size: 15px; font-weight: 500; flex-shrink: 0; }
+  .messages { flex: 1; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { display: flex; gap: 10px; align-items: flex-start; }
+  .msg.user { flex-direction: row-reverse; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; border: 0.5px solid var(--border); }
+  .bubble { max-width: 72%; padding: 9px 13px; border-radius: var(--radius-lg); font-size: 13px; line-height: 1.55; background: var(--bg2); border: 0.5px solid var(--border); color: var(--text); white-space: pre-wrap; word-break: break-word; }
+  .msg.user .bubble { background: var(--bg3); }
+  .bubble.thinking { color: var(--text2); font-style: italic; }
+  .transcript-label { font-size: 11px; color: var(--text2); margin-bottom: 4px; font-style: italic; }
+
+  /* ── Input row ── */
+  .input-row { padding: 10px 16px; border-top: 0.5px solid var(--border); display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  .chat-input { flex: 1; padding: 8px 12px; border-radius: var(--radius); border: 0.5px solid var(--border2); background: var(--bg2); color: var(--text); font-size: 13px; outline: none; }
+  .chat-input:focus { border-color: var(--accent); }
+  .btn-icon { width: 34px; height: 34px; border-radius: var(--radius); border: 0.5px solid var(--border2); background: transparent; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; color: var(--text); transition: background .12s; flex-shrink: 0; }
+  .btn-icon:hover { background: var(--bg3); }
+  .btn-icon.recording { background: var(--mic-live); border-color: var(--mic-live); color: #fff; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.7 } }
+  .btn-send { padding: 0 14px; height: 34px; border-radius: var(--radius); border: 0.5px solid var(--border2); background: transparent; cursor: pointer; font-size: 13px; color: var(--text); transition: background .12s; white-space: nowrap; }
+  .btn-send:hover { background: var(--bg3); }
+
+  /* ── Logs ── */
+  .logs-layout { display: flex; flex: 1; overflow: hidden; }
+  .logs-nav { width: 160px; min-width: 160px; border-right: 0.5px solid var(--border); padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+  .log-item { padding: 7px 10px; border-radius: var(--radius); font-size: 13px; cursor: pointer; color: var(--text2); transition: background .12s; }
+  .log-item:hover  { background: var(--bg2); color: var(--text); }
+  .log-item.active { background: var(--bg3); color: var(--text); font-weight: 500; }
+  .logs-right { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .log-content { flex: 1; padding: 16px 18px; overflow-y: auto; font-size: 13px; line-height: 1.75; color: var(--text); white-space: pre-wrap; }
+  .log-append { border-top: 0.5px solid var(--border); padding: 10px 12px; display: flex; gap: 8px; align-items: flex-start; }
+  .log-append textarea { flex: 1; padding: 7px 10px; font-size: 12px; border: 0.5px solid var(--border2); border-radius: var(--radius); background: var(--bg2); color: var(--text); resize: none; height: 56px; font-family: inherit; outline: none; }
+  .log-append button { padding: 7px 14px; font-size: 12px; border: 0.5px solid var(--border2); border-radius: var(--radius); background: transparent; cursor: pointer; color: var(--text); white-space: nowrap; }
+
+  /* ── Quests ── */
+  .quest-layout { display: flex; flex: 1; overflow: hidden; }
+  .quest-form { width: 210px; min-width: 210px; border-right: 0.5px solid var(--border); padding: 16px 14px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+  .field-label { font-size: 11px; color: var(--text2); margin-bottom: 3px; }
+  .quest-form input, .quest-form select { width: 100%; padding: 7px 9px; font-size: 13px; border: 0.5px solid var(--border2); border-radius: var(--radius); background: var(--bg2); color: var(--text); outline: none; font-family: inherit; }
+  .quest-form button { padding: 8px; font-size: 13px; border: 0.5px solid var(--border2); border-radius: var(--radius); background: transparent; cursor: pointer; color: var(--text); font-weight: 500; }
+  .quest-board { flex: 1; padding: 16px 18px; overflow-y: auto; }
+  .quest-section-title { font-size: 11px; font-weight: 500; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+  .quest-item { display: flex; align-items: center; gap: 9px; padding: 8px 11px; border-radius: var(--radius); border: 0.5px solid var(--border); margin-bottom: 6px; font-size: 13px; background: var(--bg2); }
+  .p-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .p-critical { background: #e24b4a; }
+  .p-high     { background: #ef9f27; }
+  .p-normal   { background: #639922; }
+  .p-low      { background: #888780; }
+  .quest-meta { font-size: 11px; color: var(--text2); margin-left: auto; white-space: nowrap; }
+  .quest-done { opacity: .5; text-decoration: line-through; }
+
+  /* ── No-speech notice ── */
+  .notice { font-size: 12px; color: var(--text3); padding: 4px 6px; }
+
+  /* ── Telegram Inbox ── */
+  .tg-layout { display: flex; flex: 1; overflow: hidden; }
+  .tg-sidebar { width: 200px; min-width: 200px; border-right: 0.5px solid var(--border); overflow-y: auto; }
+  .tg-chat-item { padding: 10px 14px; cursor: pointer; border-bottom: 0.5px solid var(--border); transition: background .12s; }
+  .tg-chat-item:hover  { background: var(--bg2); }
+  .tg-chat-item.active { background: var(--bg3); }
+  .tg-chat-name { font-size: 13px; font-weight: 500; }
+  .tg-chat-preview { font-size: 11px; color: var(--text2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tg-badge { display: inline-block; background: #2AABEE; color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 8px; margin-left: 4px; }
+  .tg-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .tg-header { padding: 12px 16px; border-bottom: 0.5px solid var(--border); font-size: 14px; font-weight: 500; flex-shrink: 0; color: var(--text2); }
+  .tg-messages { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .tg-msg { display: flex; gap: 8px; align-items: flex-end; }
+  .tg-msg.staff { flex-direction: row-reverse; }
+  .tg-bubble { max-width: 68%; padding: 8px 12px; border-radius: var(--radius-lg); font-size: 13px; line-height: 1.5; border: 0.5px solid var(--border); }
+  .tg-msg.user  .tg-bubble { background: var(--bg2); }
+  .tg-msg.staff .tg-bubble { background: #2AABEE22; border-color: #2AABEE55; }
+  .tg-ts { font-size: 10px; color: var(--text3); margin-bottom: 2px; }
+  .tg-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text3); font-size: 13px; }
+  .tg-input-row { padding: 10px 16px; border-top: 0.5px solid var(--border); display: flex; gap: 8px; flex-shrink: 0; }
+  .tg-input { flex: 1; padding: 8px 12px; border-radius: var(--radius); border: 0.5px solid var(--border2); background: var(--bg2); color: var(--text); font-size: 13px; outline: none; }
+  .tg-send { padding: 0 16px; height: 34px; border-radius: var(--radius); border: 0.5px solid var(--border2); background: transparent; cursor: pointer; font-size: 13px; color: var(--text); }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar" aria-label="Agent selector">
+  <div>
+    <div class="sidebar-title">🏢 Virtual Office</div>
+    <div class="sidebar-date" id="vo-date"></div>
+  </div>
+  <div class="divider"></div>
+  <div class="section-label">Specialist</div>
+  <button class="agent-btn active" onclick="selectAgent(this,'Chief\'s Assistant','🎯')"><span class="agent-icon">🎯</span>Chief's Assistant</button>
+  <button class="agent-btn" onclick="selectAgent(this,'Logistics','📦')"><span class="agent-icon">📦</span>Logistics</button>
+  <button class="agent-btn" onclick="selectAgent(this,'Front Desk','🏢')"><span class="agent-icon">🏢</span>Front Desk</button>
+  <button class="agent-btn" onclick="selectAgent(this,'HR','👥')"><span class="agent-icon">👥</span>HR</button>
+  <button class="agent-btn" onclick="selectAgent(this,'SysAdmin','🖥️')"><span class="agent-icon">🖥️</span>SysAdmin</button>
+  <div class="divider"></div>
+  <div class="status" id="api-status">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text">Checking API…</span>
+  </div>
+</nav>
+
+<!-- Main -->
+<div class="main">
+  <div class="tabs" role="tablist">
+    <button class="tab active" role="tab" onclick="switchTab('chat',this)">💬 Chat</button>
+    <button class="tab" role="tab" onclick="switchTab('logs',this)">📋 System logs</button>
+    <button class="tab" role="tab" onclick="switchTab('quests',this)">⚔️ Quest board</button>
+    <button class="tab" role="tab" onclick="switchTab('telegram',this)">✈️ Telegram <span id="tg-unread-badge" style="display:none" class="tg-badge">0</span></button>
+  </div>
+
+  <!-- Chat panel -->
+  <section class="panel active" id="panel-chat" role="tabpanel">
+    <div class="chat-header" id="chat-header">🎯 Chief's Assistant</div>
+    <div class="messages" id="messages" aria-live="polite"></div>
+    <div class="input-row">
+      <button class="btn-icon" id="mic-btn" title="Hold to speak" aria-label="Start voice input" onclick="toggleMic()">🎙️</button>
+      <input class="chat-input" id="chat-input" type="text" placeholder="Message Chief's Assistant…" onkeydown="if(event.key==='Enter')sendText()" />
+      <button class="btn-send" onclick="sendText()">Send</button>
+    </div>
+    <div class="notice" id="speech-notice" style="display:none">⚠️ Your browser doesn't support the Web Speech API. Use Chrome or Edge for voice input.</div>
+  </section>
+
+  <!-- Telegram inbox panel -->
+  <section class="panel" id="panel-telegram" role="tabpanel">
+    <div class="tg-layout">
+      <div class="tg-sidebar" id="tg-chat-list">
+        <div style="padding:12px 14px;font-size:11px;color:var(--text3);">No Telegram messages yet</div>
+      </div>
+      <div class="tg-main">
+        <div class="tg-header" id="tg-header">Select a conversation</div>
+        <div class="tg-messages" id="tg-messages">
+          <div class="tg-empty">👈 Pick a chat from the list</div>
+        </div>
+        <div class="tg-input-row" id="tg-input-row" style="display:none">
+          <input class="tg-input" id="tg-input" type="text" placeholder="Type a reply…" onkeydown="if(event.key==='Enter')sendTgReply()" />
+          <button class="tg-send" onclick="sendTgReply()">Send</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Logs panel -->
+  <section class="panel" id="panel-logs" role="tabpanel">
+    <div class="logs-layout">
+      <nav class="logs-nav" aria-label="Log files">
+        <div class="log-item active" onclick="selectLog(this,'logistics_log')">Logistics log</div>
+        <div class="log-item" onclick="selectLog(this,'system_status')">System status</div>
+        <div class="log-item" onclick="selectLog(this,'hr_log')">HR log</div>
+      </nav>
+      <div class="logs-right">
+        <div class="log-content" id="log-content">Loading…</div>
+        <div class="log-append">
+          <textarea id="log-entry" placeholder="Append a note…"></textarea>
+          <button onclick="appendLog()">Write</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quest board panel -->
+  <section class="panel" id="panel-quests" role="tabpanel">
+    <div class="quest-layout">
+      <form class="quest-form" onsubmit="postQuest(event)">
+        <div style="font-size:13px;font-weight:500;">Post quest</div>
+        <div>
+          <div class="field-label">Title</div>
+          <input type="text" id="q-title" placeholder="Quest title" required />
+        </div>
+        <div>
+          <div class="field-label">Assign to</div>
+          <select id="q-assignee">
+            <option>Chief's Assistant</option>
+            <option>Logistics</option>
+            <option>Front Desk</option>
+            <option>HR</option>
+            <option>SysAdmin</option>
+          </select>
+        </div>
+        <div>
+          <div class="field-label">Priority</div>
+          <select id="q-priority">
+            <option>Low</option>
+            <option selected>Normal</option>
+            <option>High</option>
+            <option>Critical</option>
+          </select>
+        </div>
+        <button type="submit">Post quest</button>
+      </form>
+      <div class="quest-board" id="quest-board">Loading…</div>
+    </div>
+  </section>
+</div>
+
+<script>
+const API = '';   // same origin — FastAPI serves this file
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let currentAgent   = "Chief's Assistant";
+let currentIcon    = '🎯';
+let history        = [];
+let currentLogKey  = 'logistics_log';
+let recognizing    = false;
+let recognition    = null;
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.getElementById('vo-date').textContent =
+  new Date().toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' });
+
+checkApi();
+loadLog('logistics_log');
+loadQuests();
+
+// ── API health ────────────────────────────────────────────────────────────────
+async function checkApi() {
+  const dot  = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  try {
+    const r = await fetch(API + '/');
+    if (r.ok) { dot.className = 'status-dot'; text.textContent = 'API online'; }
+    else       { dot.className = 'status-dot offline'; text.textContent = 'API error ' + r.status; }
+  } catch {
+    dot.className = 'status-dot offline';
+    text.textContent = 'API offline';
+  }
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('panel-' + name).classList.add('active');
+  if (name === 'logs')   loadLog(currentLogKey);
+  if (name === 'quests') loadQuests();
+}
+
+// ── Agent selection ───────────────────────────────────────────────────────────
+function selectAgent(btn, name, icon) {
+  document.querySelectorAll('.agent-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentAgent = name;
+  currentIcon  = icon;
+  history      = [];
+  document.getElementById('chat-header').textContent = icon + ' ' + name;
+  document.getElementById('chat-input').placeholder  = 'Message ' + name + '…';
+  document.getElementById('messages').innerHTML = '';
+  appendMessage('assistant', 'Switched to ' + name + '. How can I help?');
+}
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+function appendMessage(role, text, transcript) {
+  const msgs = document.getElementById('messages');
+  const wrap = document.createElement('div');
+  wrap.className = 'msg' + (role === 'user' ? ' user' : '');
+
+  const av = document.createElement('div');
+  av.className = 'avatar';
+  av.textContent = role === 'user' ? '🧑' : currentIcon;
+
+  const bub = document.createElement('div');
+  bub.className = 'bubble';
+  if (transcript) {
+    const lbl = document.createElement('div');
+    lbl.className = 'transcript-label';
+    lbl.textContent = '🎙️ "' + transcript + '"';
+    bub.appendChild(lbl);
+  }
+  bub.appendChild(document.createTextNode(text));
+
+  wrap.appendChild(av);
+  wrap.appendChild(bub);
+  msgs.appendChild(wrap);
+  msgs.scrollTop = msgs.scrollHeight;
+  return bub;
+}
+
+function appendThinking() {
+  const msgs = document.getElementById('messages');
+  const wrap = document.createElement('div');
+  wrap.className = 'msg';
+  const av = document.createElement('div');
+  av.className = 'avatar';
+  av.textContent = currentIcon;
+  const bub = document.createElement('div');
+  bub.className = 'bubble thinking';
+  bub.textContent = '…';
+  wrap.appendChild(av);
+  wrap.appendChild(bub);
+  msgs.appendChild(wrap);
+  msgs.scrollTop = msgs.scrollHeight;
+  return bub;
+}
+
+async function sendMessage(text, transcript) {
+  if (!text.trim()) return;
+  appendMessage('user', transcript ? '' : text, transcript ? text : null);
+
+  const bubble = appendThinking();
+  bubble.className = 'bubble';
+  bubble.textContent = '';
+
+  try {
+    const resp = await fetch(API + '/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: currentAgent, message: text, history: history.slice(-10) }),
+    });
+    if (!resp.ok) { bubble.textContent = '⚠️ API error ' + resp.status; return; }
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let   full    = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      full += decoder.decode(value, { stream: true });
+      bubble.textContent = full;
+      document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+    }
+
+    history.push({ role: 'user',      content: text });
+    history.push({ role: 'assistant', content: full });
+    if (history.length > 20) history = history.slice(-20);
+
+  } catch (e) {
+    bubble.textContent = '⚠️ ' + e.message;
+  }
+}
+
+function sendText() {
+  const inp = document.getElementById('chat-input');
+  const val = inp.value.trim();
+  if (!val) return;
+  inp.value = '';
+  sendMessage(val, null);
+}
+
+// ── Web Speech API ─────────────────────────────────────────────────────────────
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SpeechRec) {
+  document.getElementById('speech-notice').style.display = 'block';
+  document.getElementById('mic-btn').disabled = true;
+  document.getElementById('mic-btn').title = 'Speech not supported in this browser';
+} else {
+  recognition = new SpeechRec();
+  recognition.continuous      = false;
+  recognition.interimResults  = true;
+  recognition.lang            = navigator.language || 'en-US';
+
+  recognition.onstart = () => {
+    recognizing = true;
+    document.getElementById('mic-btn').classList.add('recording');
+    document.getElementById('chat-input').placeholder = 'Listening…';
+  };
+
+  recognition.onend = () => {
+    recognizing = false;
+    document.getElementById('mic-btn').classList.remove('recording');
+    document.getElementById('chat-input').placeholder = 'Message ' + currentAgent + '…';
+  };
+
+  recognition.onresult = (event) => {
+    let interim = '', final = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (event.results[i].isFinal) final   += event.results[i][0].transcript;
+      else                          interim += event.results[i][0].transcript;
+    }
+    document.getElementById('chat-input').value = final || interim;
+    if (final) sendVoice(final);
+  };
+
+  recognition.onerror = (e) => {
+    recognizing = false;
+    document.getElementById('mic-btn').classList.remove('recording');
+    if (e.error !== 'no-speech' && e.error !== 'aborted') {
+      appendMessage('assistant', '⚠️ Speech error: ' + e.error);
+    }
+  };
+}
+
+function toggleMic() {
+  if (!recognition) return;
+  if (recognizing) { recognition.stop(); return; }
+  document.getElementById('chat-input').value = '';
+  recognition.start();
+}
+
+function sendVoice(transcript) {
+  document.getElementById('chat-input').value = '';
+  sendMessage(transcript, transcript);
+}
+
+// ── Logs ──────────────────────────────────────────────────────────────────────
+async function loadLog(key) {
+  currentLogKey = key;
+  const el = document.getElementById('log-content');
+  el.textContent = 'Loading…';
+  try {
+    const r = await fetch(API + '/logs/' + key);
+    const j = await r.json();
+    el.textContent = j.content || '(empty)';
+  } catch { el.textContent = '⚠️ Cannot reach API.'; }
+}
+
+function selectLog(el, key) {
+  document.querySelectorAll('.log-item').forEach(i => i.classList.remove('active'));
+  el.classList.add('active');
+  loadLog(key);
+}
+
+async function appendLog() {
+  const ta  = document.getElementById('log-entry');
+  const val = ta.value.trim();
+  if (!val) return;
+  const ts  = new Date().toISOString().slice(0,16).replace('T',' ');
+  try {
+    const r = await fetch(API + '/logs/' + currentLogKey, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '**' + ts + '** — ' + val, append: true }),
+    });
+    if (r.ok) { ta.value = ''; loadLog(currentLogKey); }
+    else alert('API error ' + r.status);
+  } catch (e) { alert(e.message); }
+}
+
+// ── Quests ────────────────────────────────────────────────────────────────────
+const PRIORITY_CLASS = { Critical: 'p-critical', High: 'p-high', Normal: 'p-normal', Low: 'p-low' };
+
+async function loadQuests() {
+  const board = document.getElementById('quest-board');
+  try {
+    const r = await fetch(API + '/quests');
+    const j = await r.json();
+    const quests = j.quests || [];
+    renderQuests(quests);
+  } catch { board.textContent = '⚠️ Cannot reach API.'; }
+}
+
+function renderQuests(quests) {
+  const board = document.getElementById('quest-board');
+  board.innerHTML = '';
+  const open = quests.filter(q => !q.done);
+  const done = quests.filter(q =>  q.done);
+
+  if (!quests.length) { board.textContent = 'No quests yet — post one to get the team moving!'; return; }
+
+  if (open.length) {
+    const h = document.createElement('div');
+    h.className = 'quest-section-title';
+    h.textContent = 'Open · ' + open.length;
+    board.appendChild(h);
+    open.forEach(q => board.appendChild(questEl(q, false)));
+  }
+
+  if (done.length) {
+    const h = document.createElement('div');
+    h.className = 'quest-section-title';
+    h.style.marginTop = '14px';
+    h.textContent = 'Completed · ' + done.length;
+    board.appendChild(h);
+    done.forEach(q => board.appendChild(questEl(q, true)));
+  }
+}
+
+function questEl(q, isDone) {
+  const div = document.createElement('div');
+  div.className = 'quest-item' + (isDone ? ' quest-done' : '');
+  const title = q.title;
+  let pClass = 'p-normal', assignee = '', priority = 'Normal';
+  const mPri = title.match(/Priority:\s*(\w+)/);
+  const mAss = title.match(/Assigned:\s*([^|]+)/);
+  if (mPri) { priority = mPri[1]; pClass = PRIORITY_CLASS[priority] || 'p-normal'; }
+  if (mAss) { assignee = mAss[1].trim(); }
+  const cleanTitle = title.replace(/\s*—.*/, '').replace(/\*\*/g, '');
+
+  div.innerHTML = '<div class="p-dot ' + pClass + '"></div>'
+    + '<span>' + cleanTitle + '</span>'
+    + '<span class="quest-meta">' + (assignee || '') + (priority !== 'Normal' ? ' · ' + priority : '') + '</span>';
+  return div;
+}
+
+// ── Telegram Inbox ────────────────────────────────────────────────────────────
+let tgChats       = [];
+let activeChatId  = null;
+let lastMsgCounts = {};
+
+async function pollTelegram() {
+  try {
+    const r = await fetch(API + '/telegram/messages');
+    const j = await r.json();
+    tgChats = j.chats || [];
+    renderTgSidebar();
+    if (activeChatId !== null) renderTgMessages(activeChatId);
+    updateTgBadge();
+  } catch {}
+}
+
+function updateTgBadge() {
+  let newMsgs = 0;
+  for (const c of tgChats) {
+    const prev = lastMsgCounts[c.chat_id] || 0;
+    const curr = c.messages.filter(m => m.from === 'user').length;
+    if (curr > prev) newMsgs += curr - prev;
+  }
+  const badge = document.getElementById('tg-unread-badge');
+  if (newMsgs > 0) { badge.textContent = newMsgs; badge.style.display = ''; }
+  else badge.style.display = 'none';
+}
+
+function renderTgSidebar() {
+  const list = document.getElementById('tg-chat-list');
+  if (!tgChats.length) {
+    list.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:var(--text3);">No Telegram messages yet</div>';
+    return;
+  }
+  list.innerHTML = tgChats.map(c => {
+    const last = c.messages[c.messages.length - 1];
+    const preview = last ? last.text.slice(0, 30) + (last.text.length > 30 ? '…' : '') : '';
+    const active  = c.chat_id === activeChatId ? ' active' : '';
+    return `<div class="tg-chat-item${active}" onclick="selectTgChat(${c.chat_id})">
+      <div class="tg-chat-name">${escHtml(c.name)}</div>
+      <div class="tg-chat-preview">${escHtml(preview)}</div>
+    </div>`;
+  }).join('');
+}
+
+function selectTgChat(chatId) {
+  activeChatId = chatId;
+  const badge = document.getElementById('tg-unread-badge');
+  badge.style.display = 'none';
+  const chat = tgChats.find(c => c.chat_id === chatId);
+  if (chat) lastMsgCounts[chatId] = chat.messages.filter(m => m.from === 'user').length;
+  document.getElementById('tg-input-row').style.display = 'flex';
+  renderTgSidebar();
+  renderTgMessages(chatId);
+}
+
+function renderTgMessages(chatId) {
+  const chat = tgChats.find(c => c.chat_id === chatId);
+  if (!chat) return;
+  const header = document.getElementById('tg-header');
+  header.textContent = chat.name + (chat.username ? '  @' + chat.username : '');
+  const box = document.getElementById('tg-messages');
+  box.innerHTML = chat.messages.map(m => `
+    <div class="tg-msg ${m.from}">
+      <div>
+        <div class="tg-ts">${m.from === 'staff' ? 'You' : chat.name} · ${m.ts}</div>
+        <div class="tg-bubble">${escHtml(m.text)}</div>
+      </div>
+    </div>`).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+async function sendTgReply() {
+  const inp  = document.getElementById('tg-input');
+  const text = inp.value.trim();
+  if (!text || activeChatId === null) return;
+  inp.value = '';
+  try {
+    await fetch(API + '/telegram/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: activeChatId, text }),
+    });
+    await pollTelegram();
+  } catch (e) { alert(e.message); }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Poll every 2 seconds
+setInterval(pollTelegram, 2000);
+pollTelegram();
+
+async function postQuest(e) {
+  e.preventDefault();
+  const title    = document.getElementById('q-title').value.trim();
+  const assignee = document.getElementById('q-assignee').value;
+  const priority = document.getElementById('q-priority').value;
+  if (!title) return;
+  try {
+    const r = await fetch(API + '/quests/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, assignee, priority }),
+    });
+    if (r.ok) { document.getElementById('q-title').value = ''; loadQuests(); }
+    else alert('API error ' + r.status);
+  } catch (e) { alert(e.message); }
+}
+</script>
+</body>
+</html>

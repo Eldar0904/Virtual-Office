@@ -1,22 +1,19 @@
 from __future__ import annotations
 
 import datetime
-import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-OLLAMA_BASE = "http://localhost:11434/v1"
-CHAT_MODEL = "llama3.1:8b"
-
 BASE_DIR = Path(__file__).parent.parent
+UI_DIR   = BASE_DIR / "ui"
 
 STATE_FILES: dict[str, Path] = {
     "logistics_log": BASE_DIR / "daily-ops" / "logistics_log.md",
@@ -25,33 +22,13 @@ STATE_FILES: dict[str, Path] = {
     "hr_log":        BASE_DIR / "administration" / "hr_log.md",
 }
 
-AGENT_PERSONAS: dict[str, str] = {
-    "Chief's Assistant": (
-        "You are the Chief's Assistant at a professional virtual office. "
-        "You handle high-level coordination, executive summaries, meeting preparation, "
-        "and strategic oversight. Be formal, concise, and proactive."
-    ),
-    "Logistics": (
-        "You are the Logistics Specialist at a virtual office. "
-        "You manage resource tracking, task routing, operational workflows, "
-        "and delivery coordination. Be systematic and detail-oriented."
-    ),
-    "Front Desk": (
-        "You are the Front Desk Coordinator at a virtual office. "
-        "You handle scheduling, visitor management, communications routing, "
-        "and daily briefings. Be friendly, organised, and responsive."
-    ),
-    "HR": (
-        "You are the HR Manager at a virtual office. "
-        "You manage personnel matters, team welfare, onboarding, "
-        "and policy compliance. Be empathetic, professional, and supportive."
-    ),
-    "SysAdmin": (
-        "You are the System Administrator at a virtual office. "
-        "You oversee technical infrastructure, system health monitoring, "
-        "debugging, and security. Be technical, precise, and methodical."
-    ),
-}
+# ── Telegram relay store ──────────────────────────────────────────────────────
+# { chat_id: { "name": str, "username": str, "messages": [...] } }
+tg_chats: dict[int, dict[str, Any]] = {}
+
+# Replies queued by UI staff, consumed by the bot process
+# [ { "chat_id": int, "text": str } ]
+tg_reply_queue: list[dict[str, Any]] = []
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
@@ -66,90 +43,90 @@ app.add_middleware(
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
-class ChatPayload(BaseModel):
-    agent: str
-    message: str
-    history: list[dict[str, str]] = []
-
-
 class LogWrite(BaseModel):
     content: str
     append: bool = True
 
 
-# ── Routes: health ────────────────────────────────────────────────────────────
+class TgIncoming(BaseModel):
+    chat_id:  int
+    name:     str
+    username: str = ""
+    text:     str
+
+
+class TgReply(BaseModel):
+    chat_id: int
+    text:    str
+
+
+# ── Routes: health & UI ───────────────────────────────────────────────────────
 
 @app.get("/")
 def root() -> dict[str, str]:
     return {"status": "Virtual Office API running", "version": "1.0.0"}
 
 
-# ── Routes: chat ──────────────────────────────────────────────────────────────
-
-@app.post("/chat/stream")
-async def chat_stream(payload: ChatPayload) -> StreamingResponse:
-    """Stream token-by-token responses from the local Ollama instance."""
-    system_prompt = AGENT_PERSONAS.get(
-        payload.agent, AGENT_PERSONAS["Chief's Assistant"]
-    )
-
-    messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-    # Keep last 10 turns for context window hygiene
-    messages.extend(payload.history[-10:])
-    messages.append({"role": "user", "content": payload.message})
-
-    async def token_generator():
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                async with client.stream(
-                    "POST",
-                    f"{OLLAMA_BASE}/chat/completions",
-                    json={"model": CHAT_MODEL, "messages": messages, "stream": True},
-                    headers={"Content-Type": "application/json"},
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        raw = line[6:]
-                        if raw.strip() == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(raw)
-                            delta = chunk["choices"][0]["delta"].get("content", "")
-                            if delta:
-                                yield delta
-                        except (json.JSONDecodeError, KeyError):
-                            continue
-        except httpx.ConnectError:
-            yield "\n\n⚠️ Ollama is not reachable at localhost:11434. Run `ollama serve` to start it."
-        except httpx.HTTPStatusError as exc:
-            yield f"\n\n⚠️ Ollama returned HTTP {exc.response.status_code}."
-
-    return StreamingResponse(token_generator(), media_type="text/plain")
+@app.get("/app", response_class=FileResponse, include_in_schema=False)
+def serve_ui() -> FileResponse:
+    return FileResponse(UI_DIR / "index.html")
 
 
-@app.post("/chat")
-async def chat_blocking(payload: ChatPayload) -> dict[str, str]:
-    """Non-streaming fallback for single-shot responses."""
-    system_prompt = AGENT_PERSONAS.get(
-        payload.agent, AGENT_PERSONAS["Chief's Assistant"]
-    )
-    messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-    messages.extend(payload.history[-10:])
-    messages.append({"role": "user", "content": payload.message})
+# ── Routes: Telegram relay ────────────────────────────────────────────────────
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            r = await client.post(
-                f"{OLLAMA_BASE}/chat/completions",
-                json={"model": CHAT_MODEL, "messages": messages, "stream": False},
-            )
-            r.raise_for_status()
-            content: str = r.json()["choices"][0]["message"]["content"]
-            return {"response": content}
-    except httpx.ConnectError:
-        raise HTTPException(status_code=503, detail="Ollama unreachable at localhost:11434")
+@app.post("/telegram/message")
+def telegram_incoming(body: TgIncoming) -> dict[str, str]:
+    """Called by the bot when a Telegram user sends a message."""
+    if body.chat_id not in tg_chats:
+        tg_chats[body.chat_id] = {
+            "name":     body.name,
+            "username": body.username,
+            "messages": [],
+        }
+    tg_chats[body.chat_id]["messages"].append({
+        "from": "user",
+        "text": body.text,
+        "ts":   datetime.datetime.now().strftime("%H:%M"),
+    })
+    return {"status": "ok"}
+
+
+@app.get("/telegram/messages")
+def telegram_messages() -> dict[str, Any]:
+    """Polled by the UI to show all active Telegram conversations."""
+    return {
+        "chats": [
+            {
+                "chat_id":  cid,
+                "name":     data["name"],
+                "username": data["username"],
+                "messages": data["messages"],
+            }
+            for cid, data in tg_chats.items()
+        ]
+    }
+
+
+@app.post("/telegram/reply")
+def telegram_reply(body: TgReply) -> dict[str, str]:
+    """Called by UI staff to send a reply to a Telegram user."""
+    if body.chat_id not in tg_chats:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    tg_chats[body.chat_id]["messages"].append({
+        "from": "staff",
+        "text": body.text,
+        "ts":   datetime.datetime.now().strftime("%H:%M"),
+    })
+    tg_reply_queue.append({"chat_id": body.chat_id, "text": body.text})
+    return {"status": "queued"}
+
+
+@app.get("/telegram/pending-replies")
+def telegram_pending() -> dict[str, Any]:
+    """Polled by the bot to pick up replies queued by staff."""
+    pending = tg_reply_queue.copy()
+    tg_reply_queue.clear()
+    return {"replies": pending}
 
 
 # ── Routes: logs ──────────────────────────────────────────────────────────────
@@ -170,13 +147,11 @@ def write_log(log_key: str, body: LogWrite) -> dict[str, str]:
     if path is None:
         raise HTTPException(status_code=404, detail=f"Unknown log key: {log_key!r}")
     path.parent.mkdir(parents=True, exist_ok=True)
-
     if body.append and path.exists():
         existing = path.read_text(encoding="utf-8")
         path.write_text(existing.rstrip() + "\n\n" + body.content + "\n", encoding="utf-8")
     else:
         path.write_text(body.content, encoding="utf-8")
-
     return {"status": "written", "path": str(path)}
 
 
@@ -187,40 +162,32 @@ def get_quests() -> dict[str, Any]:
     path = STATE_FILES["quest_board"]
     if not path.exists():
         return {"content": "", "quests": []}
-
     content = path.read_text(encoding="utf-8")
     quests: list[dict[str, Any]] = []
-
     for line in content.splitlines():
         stripped = line.strip()
         if stripped.startswith("- [ ]"):
             quests.append({"title": stripped[6:].strip(), "done": False})
         elif stripped.startswith("- [x]"):
             quests.append({"title": stripped[6:].strip(), "done": True})
-
     return {"content": content, "quests": quests}
 
 
 @app.post("/quests/add")
 def add_quest(body: dict[str, str]) -> dict[str, str]:
-    title = body.get("title", "").strip()
+    title    = body.get("title", "").strip()
     assignee = body.get("assignee", "Unassigned").strip()
     priority = body.get("priority", "Normal").strip()
-
     if not title:
         raise HTTPException(status_code=400, detail="Quest title is required")
-
     path = STATE_FILES["quest_board"]
     path.parent.mkdir(parents=True, exist_ok=True)
-
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     entry = f"\n- [ ] **{title}** — Assigned: {assignee} | Priority: {priority} | Added: {timestamp}"
-
     if path.exists():
         existing = path.read_text(encoding="utf-8")
         path.write_text(existing.rstrip() + entry + "\n", encoding="utf-8")
     else:
         header = "# Quest Board\n\n_Active team assignments and operational tasks._\n"
         path.write_text(header + entry + "\n", encoding="utf-8")
-
     return {"status": "added", "quest": title}
