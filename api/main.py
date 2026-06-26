@@ -10,6 +10,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from api.telegram_store import (
+    add_incoming_message,
+    add_staff_reply,
+    drain_reply_queue,
+    load_chats,
+    storage_backend,
+)
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).parent.parent
@@ -21,14 +29,6 @@ STATE_FILES: dict[str, Path] = {
     "quest_board":   BASE_DIR / "daily-ops" / "quest_board.md",
     "hr_log":        BASE_DIR / "administration" / "hr_log.md",
 }
-
-# ── Telegram relay store ──────────────────────────────────────────────────────
-# { chat_id: { "name": str, "username": str, "messages": [...] } }
-tg_chats: dict[int, dict[str, Any]] = {}
-
-# Replies queued by UI staff, consumed by the bot process
-# [ { "chat_id": int, "text": str } ]
-tg_reply_queue: list[dict[str, Any]] = []
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
@@ -74,26 +74,33 @@ def serve_ui() -> FileResponse:
 
 # ── Routes: Telegram relay ────────────────────────────────────────────────────
 
+@app.get("/telegram/status")
+def telegram_status() -> dict[str, Any]:
+    chats = load_chats()
+    return {
+        "storage": storage_backend(),
+        "chat_count": len(chats),
+        "ready": storage_backend() == "redis",
+    }
+
+
 @app.post("/telegram/message")
 def telegram_incoming(body: TgIncoming) -> dict[str, str]:
     """Called by the bot when a Telegram user sends a message."""
-    if body.chat_id not in tg_chats:
-        tg_chats[body.chat_id] = {
-            "name":     body.name,
-            "username": body.username,
-            "messages": [],
-        }
-    tg_chats[body.chat_id]["messages"].append({
-        "from": "user",
-        "text": body.text,
-        "ts":   datetime.datetime.now().strftime("%H:%M"),
-    })
+    add_incoming_message(
+        body.chat_id,
+        body.name,
+        body.username,
+        body.text,
+        datetime.datetime.now().strftime("%H:%M"),
+    )
     return {"status": "ok"}
 
 
 @app.get("/telegram/messages")
 def telegram_messages() -> dict[str, Any]:
     """Polled by the UI to show all active Telegram conversations."""
+    chats = load_chats()
     return {
         "chats": [
             {
@@ -102,7 +109,7 @@ def telegram_messages() -> dict[str, Any]:
                 "username": data["username"],
                 "messages": data["messages"],
             }
-            for cid, data in tg_chats.items()
+            for cid, data in chats.items()
         ]
     }
 
@@ -110,23 +117,21 @@ def telegram_messages() -> dict[str, Any]:
 @app.post("/telegram/reply")
 def telegram_reply(body: TgReply) -> dict[str, str]:
     """Called by UI staff to send a reply to a Telegram user."""
-    if body.chat_id not in tg_chats:
+    try:
+        add_staff_reply(
+            body.chat_id,
+            body.text,
+            datetime.datetime.now().strftime("%H:%M"),
+        )
+    except KeyError:
         raise HTTPException(status_code=404, detail="Chat not found")
-    tg_chats[body.chat_id]["messages"].append({
-        "from": "staff",
-        "text": body.text,
-        "ts":   datetime.datetime.now().strftime("%H:%M"),
-    })
-    tg_reply_queue.append({"chat_id": body.chat_id, "text": body.text})
     return {"status": "queued"}
 
 
 @app.get("/telegram/pending-replies")
 def telegram_pending() -> dict[str, Any]:
     """Polled by the bot to pick up replies queued by staff."""
-    pending = tg_reply_queue.copy()
-    tg_reply_queue.clear()
-    return {"replies": pending}
+    return {"replies": drain_reply_queue()}
 
 
 # ── Routes: logs ──────────────────────────────────────────────────────────────
